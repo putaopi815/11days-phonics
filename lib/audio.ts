@@ -26,48 +26,66 @@ function normalizeIpaForLookup(ipa: string): string {
   return ipa.replace(/^\/|\/$/g, "").trim().replace(/ɡ/g, "g").replace(/:/g, "\u02D0");
 }
 
+/** 安全解析 JSON，403 等返回 HTML 时不抛错 */
+async function safeJson<T = unknown>(res: Response): Promise<T | null> {
+  const text = await res.text();
+  if (!res.ok) return null;
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    return null;
+  }
+}
+
 /** 播放音素：走 /api/phoneme（单音素或序列），无音频时用 TTS 兜底 */
 export async function playIpaAudio(ipa: string, accent?: Accent) {
-  const rawIpa = normalizeIpaForLookup(ipa);
-  const res = await fetch(
-    `/api/phoneme?ipa=${encodeURIComponent(rawIpa)}`,
-  );
-  const data = await res.json();
-
-  // 单音素：直接播
-  if (data?.audioUrl) {
-    const audio = new Audio(data.audioUrl);
-    await audio.play();
-    return;
-  }
-
-  // 序列（双元音 / tr dr）：依次播每个子音素
-  if (Array.isArray(data?.sequence)) {
-    const gapMs: number =
-      typeof data.gapMs === "number" ? data.gapMs : 60;
-
-    for (let i = 0; i < data.sequence.length; i++) {
-      const unit = data.sequence[i];
-      const r2 = await fetch(
-        `/api/phoneme?ipa=${encodeURIComponent(unit)}`,
-      );
-      const d2 = await r2.json();
-
-      if (d2?.audioUrl) {
-        const a2 = new Audio(d2.audioUrl);
-        await a2.play();
-        await new Promise((r) => setTimeout(r, gapMs));
-      }
+  try {
+    const rawIpa = normalizeIpaForLookup(ipa);
+    const res = await fetch(
+      `/api/phoneme?ipa=${encodeURIComponent(rawIpa)}`,
+    );
+    const data = await safeJson<{ audioUrl?: string; sequence?: string[]; gapMs?: number }>(res);
+    if (!data) {
+      if (accent) playHintPhoneme(ipa, accent);
+      return;
     }
-    return;
-  }
 
-  // 无在线音频时用 TTS 读近似词兜底，保证用户能听到声音
-  if (accent) {
-    playHintPhoneme(ipa, accent);
-    return;
+    // 单音素：直接播
+    if (data.audioUrl) {
+      const audio = new Audio(data.audioUrl);
+      await audio.play();
+      return;
+    }
+
+    // 序列（双元音 / tr dr）：依次播每个子音素
+    if (Array.isArray(data.sequence)) {
+      const gapMs: number =
+        typeof data.gapMs === "number" ? data.gapMs : 60;
+
+      for (let i = 0; i < data.sequence.length; i++) {
+        const unit = data.sequence[i];
+        const r2 = await fetch(
+          `/api/phoneme?ipa=${encodeURIComponent(unit)}`,
+        );
+        const d2 = await safeJson<{ audioUrl?: string }>(r2);
+
+        if (d2?.audioUrl) {
+          const a2 = new Audio(d2.audioUrl);
+          await a2.play();
+          await new Promise((r) => setTimeout(r, gapMs));
+        }
+      }
+      return;
+    }
+
+    // 无在线音频时用 TTS 读近似词兜底
+    if (accent) {
+      playHintPhoneme(ipa, accent);
+      return;
+    }
+  } catch {
+    if (accent) playHintPhoneme(ipa, accent);
   }
-  throw new Error("No phoneme audio");
 }
 
 /** TTS 近似提示（可选兜底）：用短词近似读该音素 */

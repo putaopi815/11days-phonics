@@ -5,13 +5,8 @@ export type IpaAsset =
   | { kind: "single"; file: string }
   | { kind: "sequence"; ipa: string[]; gapMs?: number };
 
-/** 通过 API 请求可走服务端回退逻辑（如 g.m4a → ɡ.m4a、dh.m4a → ð.m4a） */
-const API_FALLBACK_FILES = new Set(["g.m4a", "dh.m4a"]);
-
+/** 生产环境（Vercel）下 API 读 public 可能不可靠，g/dh 改为直接走静态路径，与其它音标一致 */
 export function soundUrl(fileName: string) {
-  if (API_FALLBACK_FILES.has(fileName)) {
-    return `/api/ipa-sound?file=${encodeURIComponent(fileName)}`;
-  }
   return `/ipa-sounds/${encodeURIComponent(fileName)}`;
 }
 
